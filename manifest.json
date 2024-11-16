@@ -24,5 +24,6 @@
       "deviceType": "urn:schemas-upnp-org:device:InternetGatewayDevice:1",
       "manufacturer": "SOYEA TECHNOLOGY CO., LTD."
     }
-  ]
+  ],
+  "version": "0.0.1"
 }
