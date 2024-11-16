@@ -1,0 +1,71 @@
+name: Update from Home Assistant Core
+
+on:
+  workflow_dispatch:
+    inputs:
+      new_tag:
+        description: 'The new version to update to'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    name: Update
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the Home Assistant repository
+        uses: actions/checkout@v4
+        with:
+          repository: home-assistant/core
+          sparse-checkout: 'homeassistant/components/huawei_lte/'
+          ref: ${{ github.event.inputs.new_tag }}
+          path: homeassistant-core
+
+      - name: Checkout the patch repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: patch
+          path: patch
+
+      - name: Apply the patch and save it
+        run: |
+          cd patch
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          CHANGES_COMMIT_HASH=$(git rev-parse HEAD)
+          git checkout --detach
+          git branch -D patch
+          git checkout --orphan patch
+          git reset
+          mkdir -p translations
+          mv ../homeassistant-core/homeassistant/components/huawei_lte/* .
+          mv strings.json translations/en.json
+          git add *
+          git commit -m "Copy component source from Home Assistant Core ${{ github.event.inputs.new_tag }}"
+          git cherry-pick $CHANGES_COMMIT_HASH
+          git push --force origin patch
+
+      - name: Checkout the main repository
+        uses: actions/checkout@v4
+        with:
+          path: main
+
+      - name: Push the new update to main
+        run: |
+          cd main
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -rf custom_components/huawei_lte/*
+          mv ../patch/* custom_components/huawei_lte
+          if [ -n "$(git status --porcelain)" ]
+          then
+            sed -i 's/"homeassistant": "[^"]*"/"homeassistant": "${{ github.event.inputs.new_tag }}b0"/' hacs.json
+            git add *
+            git commit -m "Update from Home Assistant Core ${{ github.event.inputs.new_tag }}"
+            git push
+          else
+            echo 'Skipping pushing to main because no changes were made'
+          fi
