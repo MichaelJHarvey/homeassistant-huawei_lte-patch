@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import partial
 import logging
 
-from huawei_lte_api.enums.net import LTEBandEnum, NetworkBandEnum, NetworkModeEnum
+from huawei_lte_api.enums.net import LTEBandEnum, NetworkModeEnum
 
 from homeassistant.components.select import (
     DOMAIN as SELECT_DOMAIN,
@@ -24,6 +23,14 @@ from homeassistant.helpers.typing import UNDEFINED
 from . import Router
 from .const import DOMAIN, KEY_NET_NET_MODE
 from .entity import HuaweiLteBaseEntityWithDevice
+from .net_mode import (
+    KEY_LTE_BAND,
+    KEY_NETWORK_MODE,
+    lte_band_configurable,
+    read_lte_band,
+    read_router_network_mode,
+    set_net_mode,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,7 +39,9 @@ _LOGGER = logging.getLogger(__name__)
 class HuaweiSelectEntityDescription(SelectEntityDescription):
     """Class describing Huawei LTE select entities."""
 
+    availability_fn: Callable[[], bool] | None
     setter_fn: Callable[[str], None]
+    state_fn: Callable[[str], str] | None
 
 
 async def async_setup_entry(
@@ -41,35 +50,61 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up from config entry."""
-    router = hass.data[DOMAIN].routers[config_entry.entry_id]
+    router: Router = hass.data[DOMAIN].routers[config_entry.entry_id]
     selects: list[Entity] = []
 
-    desc = HuaweiSelectEntityDescription(
+    network_mode_desc = HuaweiSelectEntityDescription(
         key=KEY_NET_NET_MODE,
         entity_category=EntityCategory.CONFIG,
         name="Preferred network mode",
         translation_key="preferred_network_mode",
         options=[
-            NetworkModeEnum.MODE_AUTO.value,
-            NetworkModeEnum.MODE_4G_3G_AUTO.value,
-            NetworkModeEnum.MODE_4G_2G_AUTO.value,
-            NetworkModeEnum.MODE_4G_ONLY.value,
-            NetworkModeEnum.MODE_3G_2G_AUTO.value,
-            NetworkModeEnum.MODE_3G_ONLY.value,
-            NetworkModeEnum.MODE_2G_ONLY.value,
+            NetworkModeEnum.MODE_AUTO.name,
+            NetworkModeEnum.MODE_4G_3G_AUTO.name,
+            NetworkModeEnum.MODE_4G_2G_AUTO.name,
+            NetworkModeEnum.MODE_4G_ONLY.name,
+            NetworkModeEnum.MODE_3G_2G_AUTO.name,
+            NetworkModeEnum.MODE_3G_ONLY.name,
+            NetworkModeEnum.MODE_2G_ONLY.name,
         ],
-        setter_fn=partial(
-            router.client.net.set_net_mode,
-            LTEBandEnum.ALL,
-            NetworkBandEnum.ALL,
-        ),
+        availability_fn=lambda: True,
+        setter_fn=lambda mode: set_net_mode(router, network_mode=NetworkModeEnum[mode]),
+        state_fn=lambda raw: NetworkModeEnum(raw).name,
     )
     selects.append(
         HuaweiLteSelectEntity(
             router,
-            entity_description=desc,
-            key=desc.key,
-            item="NetworkMode",
+            entity_description=network_mode_desc,
+            key=network_mode_desc.key,
+            item=KEY_NETWORK_MODE,
+        )
+    )
+
+    lte_band_desc = HuaweiSelectEntityDescription(
+        key=KEY_NET_NET_MODE,
+        entity_category=EntityCategory.CONFIG,
+        name="Preferred LTE band",
+        translation_key="preferred_lte_band",
+        options=[
+            LTEBandEnum.ALL.name,
+            LTEBandEnum.B20.name,
+            LTEBandEnum.B8.name,
+            LTEBandEnum.B3.name,
+            LTEBandEnum.B1.name,
+            LTEBandEnum.B40.name,
+            LTEBandEnum.B7.name,
+            LTEBandEnum.B38.name,
+        ],
+        availability_fn=lambda: lte_band_configurable(read_router_network_mode(router)),
+        setter_fn=lambda band: set_net_mode(router, lte_band=LTEBandEnum[band]),
+        state_fn=lambda raw: read_lte_band(raw).name,
+    )
+    selects.append(
+        HuaweiLteSelectEntity(
+            router,
+            entity_description=lte_band_desc,
+            key=lte_band_desc.key,
+            item=KEY_LTE_BAND,
         )
     )
 
@@ -125,6 +160,10 @@ class HuaweiLteSelectEntity(HuaweiLteBaseEntityWithDevice, SelectEntity):
 
     async def async_update(self) -> None:
         """Update state."""
+        if not self.entity_description.availability_fn():
+            self._available = False
+            return
+
         try:
             value = self.router.data[self.key][self.item]
         except KeyError:
@@ -132,4 +171,4 @@ class HuaweiLteSelectEntity(HuaweiLteBaseEntityWithDevice, SelectEntity):
             self._available = False
             return
         self._available = True
-        self._raw_state = str(value)
+        self._raw_state = self.entity_description.state_fn(value)
